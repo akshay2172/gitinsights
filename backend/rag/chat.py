@@ -9,30 +9,38 @@ from backend.rag.prompts import (
     FUNCTION_EXPLAIN_SYSTEM_PROMPT
 )
 
-def get_llm():
-    """Get the appropriate LangChain Chat Model based on environment variables."""
-    gemini_api_key = os.getenv("GEMINI_API_KEY")
-    openai_api_key = os.getenv("OPENAI_API_KEY")
-
-    if gemini_api_key:
-        return ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash",
-            google_api_key=gemini_api_key,
-            temperature=0.2
-        )
-    elif openai_api_key:
-        return ChatOpenAI(
-            model="gpt-4-turbo",
-            api_key=openai_api_key,
-            temperature=0.2
-        )
-    else:
-        # Fallback dummy class if no keys are found
-        class MockLLM:
-            def invoke(self, messages):
-                class MockResponse:
-                    content = "Mock Mode: Please set GEMINI_API_KEY or OPENAI_API_KEY in your environment to receive live AI responses."
-                return MockResponse()
+def get_llm():  
+    """Get the appropriate LangChain Chat Model based on environment variables."""  
+    openrouter_api_key = os.getenv("OPENROUTER_API_KEY")  
+    gemini_api_key = os.getenv("GEMINI_API_KEY")  
+    openai_api_key = os.getenv("OPENAI_API_KEY")  
+  
+    # OpenRouter first so chat goes through it even if GEMINI_API_KEY is set (for embeddings)  
+    if openrouter_api_key:  
+        return ChatOpenAI(  
+            model="openai/gpt-4-turbo",  
+            api_key=openrouter_api_key,  
+            base_url="https://openrouter.ai/api/v1",  
+            temperature=0.2  
+        )  
+    elif gemini_api_key:  
+        return ChatGoogleGenerativeAI(  
+            model="gemini-1.5-flash",  
+            google_api_key=gemini_api_key,  
+            temperature=0.2  
+        )  
+    elif openai_api_key:  
+        return ChatOpenAI(  
+            model="gpt-4-turbo",  
+            api_key=openai_api_key,  
+            temperature=0.2  
+        )  
+    else:  
+        class MockLLM:  
+            def invoke(self, messages):  
+                class MockResponse:  
+                    content = "Mock Mode: Please set OPENROUTER_API_KEY, GEMINI_API_KEY or OPENAI_API_KEY."  
+                return MockResponse()  
         return MockLLM()
 
 def query_repository_chat(repository_id: int, query: str, chat_history: list[dict] = None) -> tuple[str, list[dict]]:

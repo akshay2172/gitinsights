@@ -1,4 +1,5 @@
 import os
+import stat
 import shutil
 import git
 import re
@@ -71,7 +72,19 @@ def ingest_repository(db: Session, repository_id: int):
     try:
         # Step 1: Clean existing cloned folder if any
         if os.path.exists(clone_path):
-            shutil.rmtree(clone_path, ignore_errors=True)
+            def _on_rm_error(func, path, exc_info):
+                """Handle read-only files (common in .git on Windows)."""
+                os.chmod(path, stat.S_IWRITE)
+                func(path)
+
+            shutil.rmtree(clone_path, onerror=_on_rm_error)
+
+            # Verify the directory was actually removed
+            if os.path.exists(clone_path):
+                raise OSError(
+                    f"Failed to remove existing clone directory: {clone_path}. "
+                    "It may be locked by another process."
+                )
 
         # Step 2: Update status to cloning
         repo_record.status = "cloning"

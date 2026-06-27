@@ -67,60 +67,65 @@ export default function HomePage() {
     fetchRepositories();
   }, [fetchRepositories]);
 
+
   // Polling helper for active import
-  useEffect(() => {
-    let intervalId: NodeJS.Timeout;
+  const activeImportId = activeImportRepo?.id;  
+  
+useEffect(() => {  
+  if (!activeImportId) return;  
+  
+  let intervalId: NodeJS.Timeout;  
+  let stopped = false;  
+  
+  const pollStatus = async () => {  
+    try {  
+      const res = await fetch(`${API_BASE}/repos/${activeImportId}`);  
+      if (!res.ok) return;  
+      const data: RepositorySummary = await res.json();  
+      setActiveImportRepo(data);  
+  
+      const logs = ["Initializing ingestion pipeline..."];  
+      if (["cloning", "parsing", "indexing", "ready"].includes(data.status)) {  
+        logs.push("Cloning repository into local filesystem... Done.");  
+      }  
+      if (["parsing", "indexing", "ready"].includes(data.status)) {  
+        logs.push("Parsing file structure & extracting code components... Done.");  
+      }  
+      if (["indexing", "ready"].includes(data.status)) {  
+        logs.push("Chunking code and generating embeddings... Done.");  
+        logs.push("Indexing chunks in ChromaDB vector database... Done.");  
+      }  
+      if (data.status === "ready") {  
+        logs.push("Generating AI repository overview... Done.");  
+        logs.push("Repository is ready! Redirecting...");  
+        if (!stopped) {  
+          stopped = true;  
+          clearInterval(intervalId);  
+        }  
+        setTimeout(() => router.push(`/dashboard/${data.id}`), 1500);  
+      }  
+      if (data.status === "failed") {  
+        logs.push(`Failed: ${data.error_message || "Unknown error occurred"}`);  
+        if (!stopped) {  
+          stopped = true;  
+          clearInterval(intervalId);  
+        }  
+      }  
+      setImportLogs(logs);  
+    } catch (err) {  
+      console.error("Error polling repo status:", err);  
+    }  
+  };  
+  
+  intervalId = setInterval(pollStatus, 2000);  
+  pollStatus(); // initial check  
+  
+  return () => clearInterval(intervalId);  
+  // depend ONLY on the stable id, not the whole object  
+  // eslint-disable-next-line react-hooks/exhaustive-deps  
+}, [activeImportId, router]);
 
-    if (activeImportRepo) {
-      const pollStatus = async () => {
-        try {
-          const res = await fetch(`${API_BASE}/repos/${activeImportRepo.id}`);
-          if (res.ok) {
-            const data: RepositorySummary = await res.json();
-            setActiveImportRepo(data);
-            
-            // Generate progress log statements based on status
-            const logs = ["Initializing ingestion pipeline..."];
-            if (data.status === "cloning" || data.status === "parsing" || data.status === "indexing" || data.status === "ready") {
-              logs.push("Cloning repository into local filesystem... Done.");
-            }
-            if (data.status === "parsing" || data.status === "indexing" || data.status === "ready") {
-              logs.push("Parsing file structure & extracting code components... Done.");
-            }
-            if (data.status === "indexing" || data.status === "ready") {
-              logs.push("Chunking code and generating embeddings... Done.");
-              logs.push("Indexing chunks in ChromaDB vector database... Done.");
-            }
-            if (data.status === "ready") {
-              logs.push("Generating AI repository overview... Done.");
-              logs.push("Repository is ready! Redirecting...");
-              clearInterval(intervalId);
-              
-              // Wait a split second and navigate to dashboard
-              setTimeout(() => {
-                router.push(`/dashboard/${data.id}`);
-              }, 1500);
-            }
-            if (data.status === "failed") {
-              logs.push(`Failed: ${data.error_message || "Unknown error occurred"}`);
-              clearInterval(intervalId);
-            }
-            
-            setImportLogs(logs);
-          }
-        } catch (err) {
-          console.error("Error polling repo status:", err);
-        }
-      };
 
-      intervalId = setInterval(pollStatus, 2000);
-      pollStatus(); // initial check
-    }
-
-    return () => {
-      if (intervalId) clearInterval(intervalId);
-    };
-  }, [activeImportRepo, router]);
 
   // Handle repository import
   const handleImport = async (e: React.FormEvent) => {
