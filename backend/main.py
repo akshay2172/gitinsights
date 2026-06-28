@@ -6,7 +6,7 @@ from backend.routers import repos, explorer, search, chat, explain
 from dotenv import load_dotenv
 
 # Load environment variables
-load_dotenv()
+load_dotenv(override=True)
 
 # Initialize Database tables
 Base.metadata.create_all(bind=engine)

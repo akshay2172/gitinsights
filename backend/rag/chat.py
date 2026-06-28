@@ -11,6 +11,16 @@ from backend.rag.prompts import (
 
 def get_llm():  
     """Get the appropriate LangChain Chat Model based on environment variables."""  
+    # Local Ollama first (free/offline)  
+    use_local_llm = os.getenv("USE_LOCAL_LLM")  
+    if use_local_llm:  
+        return ChatOpenAI(  
+            model=os.getenv("OLLAMA_MODEL", "qwen2.5:3b"),  
+            api_key="ollama",  # Ollama ignores the api_key value  
+            base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),  
+            temperature=0.2  
+        )  
+  
     openrouter_api_key = os.getenv("OPENROUTER_API_KEY")  
     gemini_api_key = os.getenv("GEMINI_API_KEY")  
     openai_api_key = os.getenv("OPENAI_API_KEY")  
@@ -39,7 +49,7 @@ def get_llm():
         class MockLLM:  
             def invoke(self, messages):  
                 class MockResponse:  
-                    content = "Mock Mode: Please set OPENROUTER_API_KEY, GEMINI_API_KEY or OPENAI_API_KEY."  
+                    content = "Mock Mode: Please set USE_LOCAL_LLM (Ollama) or OPENROUTER_API_KEY, GEMINI_API_KEY or OPENAI_API_KEY."  
                 return MockResponse()  
         return MockLLM()
 
