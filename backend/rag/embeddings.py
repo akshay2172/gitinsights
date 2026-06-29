@@ -1,6 +1,6 @@
 import os
 from langchain_core.embeddings import Embeddings
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_openai import OpenAIEmbeddings
 
@@ -17,9 +17,8 @@ def get_embeddings_model() -> Embeddings:
     # IMPORTANT: Use local embeddings first (no API keys required).
     # nomic v2 is a Mixture-of-Experts model that requires trust_remote_code=True.
     return HuggingFaceEmbeddings(
-        model_name=os.getenv("HF_EMBEDDING_MODEL", "nomic-ai/nomic-embed-text-v2-moe"),
-        model_kwargs={"trust_remote_code": True},
-        trust_remote_code=True,
+        model_name=os.getenv("HF_EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5"),
+        
     )
 
     # ---- Fallbacks (kept for optional use / older deployments) ----
