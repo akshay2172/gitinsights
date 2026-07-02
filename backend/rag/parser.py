@@ -3,17 +3,59 @@ import ast
 import re
 import json
 
-# Set of standard directories and files to ignore during repository ingestion
+# Set of standard directories to ignore during repository ingestion
 IGNORED_DIRS = {
-    "node_modules", "venv", ".venv", "env", ".env", ".git", ".github",
-    "__pycache__", "build", "dist", ".next", "out", "target", "bin", "obj"
+    "node_modules",
+    "venv",
+    ".venv",
+    "env",
+    ".env",
+    ".git",
+    ".github",
+    "__pycache__",
+    "build",
+    "dist",
+    ".next",
+    "out",
+    "target",
+    "bin",
+    "obj",
+    # extra media / IDE folders
+    "images",
+    "svg",
+    ".idea",
+    ".vscode",
 }
 
 IGNORED_EXTS = {
-    ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".pdf", ".zip", ".tar",
-    ".gz", ".exe", ".dll", ".so", ".dylib", ".woff", ".woff2", ".eot", ".ttf",
-    ".mp3", ".mp4", ".wav", ".avi", ".db", ".sqlite", ".pyc"
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".ico",
+    ".svg",
+    ".pdf",
+    ".zip",
+    ".tar",
+    ".gz",
+    ".exe",
+    ".dll",
+    ".so",
+    ".dylib",
+    ".woff",
+    ".woff2",
+    ".eot",
+    ".ttf",
+    ".mp3",
+    ".mp4",
+    ".wav",
+    ".avi",
+    ".db",
+    ".sqlite",
+    ".pyc",
 }
+
+LOCKFILE_FILENAMES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml"}
 
 # Maps file extensions to programming languages
 EXTENSION_MAP = {
@@ -42,41 +84,92 @@ EXTENSION_MAP = {
     ".yml": "YAML",
     ".toml": "TOML",
     ".xml": "XML",
-    ".sql": "SQL"
+    ".sql": "SQL",
 }
+
 
 def get_file_language(file_path: str) -> str:
     _, ext = os.path.splitext(file_path.lower())
     return EXTENSION_MAP.get(ext, "Unknown")
 
-def should_process_file(file_path: str, repo_root: str) -> bool:
-    """Determine if a file should be read and processed or ignored."""
+
+def should_parse_file(file_path: str, repo_root: str) -> bool:
+    """
+    Determine if a file should be read and stored as a FileRecord.
+
+    This is used for repository explorer/wiki generation.
+    """
     relative_path = os.path.relpath(file_path, repo_root)
     parts = relative_path.split(os.sep)
-    
-    # Check if file is in any ignored folder
+
+    # Ignore files in ignored folders entirely.
+    # (For embedding exclusion we handle separately in should_embed_file.)
     for part in parts:
         if part in IGNORED_DIRS:
             return False
-            
-    # Check extension
+
+    # Skip obviously binary/large media by extension.
     _, ext = os.path.splitext(file_path.lower())
     if ext in IGNORED_EXTS:
         return False
-        
-    # Ignore files that are extremely large (e.g. lock files, data dumps)
+
+    # Ignore files that are extremely large
     try:
         if os.path.getsize(file_path) > 500 * 1024:  # > 500KB
             return False
     except OSError:
         return False
-        
+
     return True
+
+
+def should_embed_file(file_path: str, repo_root: str) -> bool:
+    """
+    Determine if a file should be chunked + embedded in the vector store.
+
+    This is the "do not embed" gate.
+    """
+    if not should_parse_file(file_path, repo_root):
+        return False
+
+    rel = os.path.relpath(file_path, repo_root).replace(os.sep, "/")
+    parts = rel.split("/")
+
+    # Never embed anything under never-embed dirs.
+    for part in parts:
+        if part in {"images", "svg", ".idea", ".vscode"}:
+            return False
+
+    # Never embed lockfiles
+    filename = os.path.basename(file_path).lower()
+    if filename in LOCKFILE_FILENAMES:
+        return False
+
+    # Never embed README/LICENSE variants
+    # Requirement: "Don't embed README / LICENSE" (as well as common variants)
+    if filename == "readme.md" or filename == "readme.txt" or filename == "readme":
+        return False
+    if filename == "license.md" or filename == "license.txt" or filename == "license":
+        return False
+
+    # Never embed any file whose name starts with README / LICENSE (defensive)
+    if filename.startswith("readme"):
+        return False
+    if filename.startswith("license"):
+        return False
+
+    return True
+
+
+# Backwards compatible alias (used elsewhere)
+def should_process_file(file_path: str, repo_root: str) -> bool:
+    return should_parse_file(file_path, repo_root)
+
 
 def parse_dependencies(repo_path: str) -> list[str]:
     """Parse common package manager configuration files to extract dependencies."""
     dependencies = []
-    
+
     # Python requirements.txt
     req_path = os.path.join(repo_path, "requirements.txt")
     if os.path.isfile(req_path):
@@ -130,12 +223,14 @@ def parse_dependencies(repo_path: str) -> list[str]:
                 in_dependencies = False
                 for line in f:
                     line = line.strip()
-                    if line.startswith("[dependencies]") or line.startswith("[dev-dependencies]"):
+                    if line.startswith("[dependencies]") or line.startswith(
+                        "[dev-dependencies]"
+                    ):
                         in_dependencies = True
                         continue
                     elif line.startswith("[") and in_dependencies:
                         in_dependencies = False
-                    
+
                     if in_dependencies and "=" in line:
                         dep_name = line.split("=")[0].strip()
                         if dep_name:
@@ -145,12 +240,13 @@ def parse_dependencies(repo_path: str) -> list[str]:
 
     return list(set(dependencies))
 
+
 def parse_python_ast(code: str) -> tuple[list[dict], list[dict], list[str]]:
     """Parse Python code using AST to extract functions, classes, and imports."""
     functions = []
     classes = []
     imports = []
-    
+
     try:
         root = ast.parse(code)
     except Exception:
@@ -165,7 +261,7 @@ def parse_python_ast(code: str) -> tuple[list[dict], list[dict], list[str]]:
             module = node.module or ""
             for alias in node.names:
                 imports.append(f"{module}.{alias.name}" if module else alias.name)
-        
+
         # Functions
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             # Check if this function is nested in a class
@@ -173,48 +269,63 @@ def parse_python_ast(code: str) -> tuple[list[dict], list[dict], list[str]]:
             curr = node
             # Determine end line
             end_line = getattr(node, "end_lineno", node.lineno)
-            
+
             args = []
             for arg in node.args.args:
                 args.append(arg.arg)
-                
-            functions.append({
-                "name": node.name,
-                "start_line": node.lineno,
-                "end_line": end_line,
-                "args": args,
-                "is_async": isinstance(node, ast.AsyncFunctionDef)
-            })
-            
+
+            functions.append(
+                {
+                    "name": node.name,
+                    "start_line": node.lineno,
+                    "end_line": end_line,
+                    "args": args,
+                    "is_async": isinstance(node, ast.AsyncFunctionDef),
+                }
+            )
+
         # Classes
         elif isinstance(node, ast.ClassDef):
             end_line = getattr(node, "end_lineno", node.lineno)
-            classes.append({
-                "name": node.name,
-                "start_line": node.lineno,
-                "end_line": end_line,
-                "bases": [ast.unparse(b) for b in node.bases] if hasattr(ast, "unparse") else []
-            })
-            
+            classes.append(
+                {
+                    "name": node.name,
+                    "start_line": node.lineno,
+                    "end_line": end_line,
+                    "bases": (
+                        [ast.unparse(b) for b in node.bases]
+                        if hasattr(ast, "unparse")
+                        else []
+                    ),
+                }
+            )
+
     return functions, classes, list(set(imports))
 
-def parse_regex_code_symbols(code: str, language: str) -> tuple[list[dict], list[dict], list[str]]:
+
+def parse_regex_code_symbols(
+    code: str, language: str
+) -> tuple[list[dict], list[dict], list[str]]:
     """Generic regex parser for languages other than Python (JS, TS, C++, Go, Java, Rust)."""
     functions = []
     classes = []
     imports = []
-    
+
     lines = code.split("\n")
-    
+
     # Setup some simple regexes for common constructs
     # Functions: e.g. function name(args) or name = (args) => or func name(args)
     # JS/TS/Java/C# function
-    fn_js_regex = re.compile(r"(?:const|let|var)?\s*([a-zA-Z0-9_$]+)\s*=\s*(?:async\s*)?\(([^)]*)\)\s*=>")
-    fn_standard_regex = re.compile(r"(?:async\s+)?function\s+([a-zA-Z0-9_$]+)\s*\(([^)]*)\)")
-    
+    fn_js_regex = re.compile(
+        r"(?:const|let|var)?\s*([a-zA-Z0-9_$]+)\s*=\s*(?:async\s*)?\(([^)]*)\)\s*=>"
+    )
+    fn_standard_regex = re.compile(
+        r"(?:async\s+)?function\s+([a-zA-Z0-9_$]+)\s*\(([^)]*)\)"
+    )
+
     # Go function: func (receiver) Name(args) or func Name(args)
     fn_go_regex = re.compile(r"func\s+(?:\([^)]*\)\s+)?([a-zA-Z0-9_]+)\s*\(([^)]*)\)")
-    
+
     # Rust function: fn name(args)
     fn_rs_regex = re.compile(r"fn\s+([a-zA-Z0-9_]+)\s*\(([^)]*)\)")
 
@@ -225,10 +336,10 @@ def parse_regex_code_symbols(code: str, language: str) -> tuple[list[dict], list
     import_js_regex = re.compile(r"import\s+.*\s+from\s+['\"]([^'\"]+)['\"]")
     require_js_regex = re.compile(r"require\s*\(\s*['\"]([^'\"]+)['\"]\s*\)")
     import_go_regex = re.compile(r"import\s+['\"]([^'\"]+)['\"]")
-    
+
     for i, line in enumerate(lines):
         line_num = i + 1
-        
+
         # JS/TS imports
         if "import" in line or "require" in line:
             js_imp = import_js_regex.search(line)
@@ -238,7 +349,7 @@ def parse_regex_code_symbols(code: str, language: str) -> tuple[list[dict], list
                 req_imp = require_js_regex.search(line)
                 if req_imp:
                     imports.append(req_imp.group(1))
-                    
+
         # Go imports
         if language == "Go":
             go_imp = import_go_regex.search(line)
@@ -247,37 +358,49 @@ def parse_regex_code_symbols(code: str, language: str) -> tuple[list[dict], list
 
         # Functions
         fn_match = None
-        if language in ["JavaScript", "TypeScript", "JavaScript (React)", "TypeScript (React)"]:
+        if language in [
+            "JavaScript",
+            "TypeScript",
+            "JavaScript (React)",
+            "TypeScript (React)",
+        ]:
             fn_match = fn_js_regex.search(line) or fn_standard_regex.search(line)
         elif language == "Go":
             fn_match = fn_go_regex.search(line)
         elif language == "Rust":
             fn_match = fn_rs_regex.search(line)
-            
+
         if fn_match:
             name = fn_match.group(1)
             args_str = fn_match.group(2) if len(fn_match.groups()) > 1 else ""
             args = [a.strip() for a in args_str.split(",") if a.strip()]
             # Assume 10-line placeholder scope range since regex can't easily parse block structure boundaries
-            functions.append({
-                "name": name,
-                "start_line": line_num,
-                "end_line": line_num + 15,
-                "args": args
-            })
-            
+            functions.append(
+                {
+                    "name": name,
+                    "start_line": line_num,
+                    "end_line": line_num + 15,
+                    "args": args,
+                }
+            )
+
         # Classes
         cl_match = class_regex.search(line)
         if cl_match:
-            classes.append({
-                "name": cl_match.group(1),
-                "start_line": line_num,
-                "end_line": line_num + 30
-            })
-            
+            classes.append(
+                {
+                    "name": cl_match.group(1),
+                    "start_line": line_num,
+                    "end_line": line_num + 30,
+                }
+            )
+
     return functions, classes, list(set(imports))
 
-def parse_code_symbols(code: str, language: str) -> tuple[list[dict], list[dict], list[str]]:
+
+def parse_code_symbols(
+    code: str, language: str
+) -> tuple[list[dict], list[dict], list[str]]:
     """Route code to language-specific parser."""
     if language == "Python":
         return parse_python_ast(code)

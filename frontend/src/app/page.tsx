@@ -64,65 +64,105 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    fetchRepositories();
+    let cancelled = false;
+    const run = async () => {
+      if (cancelled) return;
+      await fetchRepositories();
+    };
+    run();
+    return () => {
+      cancelled = true;
+    };
   }, [fetchRepositories]);
 
 
   // Polling helper for active import
   const activeImportId = activeImportRepo?.id;  
   
-useEffect(() => {  
-  if (!activeImportId) return;  
-  
-  let intervalId: NodeJS.Timeout;  
-  let stopped = false;  
-  
-  const pollStatus = async () => {  
-    try {  
-      const res = await fetch(`${API_BASE}/repos/${activeImportId}`);  
-      if (!res.ok) return;  
-      const data: RepositorySummary = await res.json();  
-      setActiveImportRepo(data);  
-  
-      const logs = ["Initializing ingestion pipeline..."];  
-      if (["cloning", "parsing", "indexing", "ready"].includes(data.status)) {  
-        logs.push("Cloning repository into local filesystem... Done.");  
-      }  
-      if (["parsing", "indexing", "ready"].includes(data.status)) {  
-        logs.push("Parsing file structure & extracting code components... Done.");  
-      }  
-      if (["indexing", "ready"].includes(data.status)) {  
-        logs.push("Chunking code and generating embeddings... Done.");  
-        logs.push("Indexing chunks in ChromaDB vector database... Done.");  
-      }  
-      if (data.status === "ready") {  
-        logs.push("Generating AI repository overview... Done.");  
-        logs.push("Repository is ready! Redirecting...");  
-        if (!stopped) {  
-          stopped = true;  
-          clearInterval(intervalId);  
-        }  
-        setTimeout(() => router.push(`/dashboard/${data.id}`), 1500);  
-      }  
-      if (data.status === "failed") {  
-        logs.push(`Failed: ${data.error_message || "Unknown error occurred"}`);  
-        if (!stopped) {  
-          stopped = true;  
-          clearInterval(intervalId);  
-        }  
-      }  
-      setImportLogs(logs);  
-    } catch (err) {  
-      console.error("Error polling repo status:", err);  
-    }  
-  };  
-  
-  intervalId = setInterval(pollStatus, 2000);  
-  pollStatus(); // initial check  
-  
-  return () => clearInterval(intervalId);  
-  // depend ONLY on the stable id, not the whole object  
-  // eslint-disable-next-line react-hooks/exhaustive-deps  
+
+useEffect(() => {
+  if (!activeImportId) return;
+
+  let intervalId: ReturnType<typeof setInterval> | null = null;
+  let stopped = false;
+
+  // Polling: be resilient to transient network failures.
+  // If the backend is still starting up or the request fails once, retry instead of
+  // spamming errors.
+  let failureCount = 0;
+  const maxFailures = 6; // ~12s with 2s interval
+
+  const pollStatus = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/repos/${activeImportId}`);
+      if (!res.ok) return;
+      const data: RepositorySummary = await res.json();
+      setActiveImportRepo(data);
+      failureCount = 0;
+
+      const logs = ["Initializing ingestion pipeline..."];
+
+      if (["cloning", "parsing", "indexing", "ready"].includes(data.status)) {
+        logs.push("Cloning repository into local filesystem... Done.");
+      }
+      if (["parsing", "indexing", "ready"].includes(data.status)) {
+        logs.push("Parsing file structure & extracting code components... Done.");
+      }
+      if (["indexing", "ready"].includes(data.status)) {
+        logs.push("Chunking code and generating embeddings... Done.");
+        logs.push("Indexing chunks in ChromaDB vector database... Done.");
+      }
+      if (data.status === "ready") {
+        logs.push("Generating AI repository overview... Done.");
+        logs.push("Repository is ready! Redirecting...");
+        if (!stopped) {
+          stopped = true;
+          if (intervalId) clearInterval(intervalId);
+        }
+        setTimeout(() => router.push(`/dashboard/${data.id}`), 1500);
+      }
+      if (data.status === "failed") {
+        logs.push(`Failed: ${data.error_message || "Unknown error occurred"}`);
+        if (!stopped) {
+          stopped = true;
+          if (intervalId) clearInterval(intervalId);
+        }
+      }
+      setImportLogs(logs);
+    } catch (err) {
+      failureCount += 1;
+      // Network errors (server not ready yet, browser offline, etc.) are transient.
+      // Stop polling after a few attempts to avoid endless console noise.
+      if (failureCount >= maxFailures) {
+        console.error("Error polling repo status (giving up):", err);
+        setImportLogs(["Failed to reach backend while polling ingestion status."]);
+        setActiveImportRepo((prev) =>
+          prev
+            ? { ...prev, status: "failed", error_message: "Backend unreachable while polling." }
+            : prev
+        );
+        stopped = true;
+        if (intervalId) clearInterval(intervalId);
+      } else {
+        console.error("Error polling repo status:", err);
+      }
+    }
+  };
+
+  intervalId = setInterval(() => {
+    if (stopped) return;
+    void pollStatus();
+  }, 2000);
+
+  // Avoid calling async setState synchronously during effect render:
+  void pollStatus();
+
+  return () => {
+    stopped = true;
+    if (intervalId) clearInterval(intervalId);
+  };
+  // depend ONLY on the stable id, not the whole object
+  // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [activeImportId, router]);
 
 
@@ -144,7 +184,7 @@ useEffect(() => {
       });
 
       if (!res.ok) {
-        const errorData = await res.json();
+        const errorData: { detail?: string } = await res.json();
         throw new Error(errorData.detail || "Failed to start repository import");
       }
 
@@ -152,8 +192,9 @@ useEffect(() => {
       setActiveImportRepo(repo);
       setGithubUrl("");
       fetchRepositories(); // Refresh the list
-    } catch (err: any) {
-      setError(err.message || "An error occurred. Check backend console.");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "An error occurred. Check backend console.";
+      setError(message);
       setIsLoading(false);
     }
   };

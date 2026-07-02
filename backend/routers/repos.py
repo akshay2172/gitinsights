@@ -52,7 +52,7 @@ def import_repository(
             existing.status = "importing"
             existing.error_message = None
             db.commit()
-            background_tasks.add_task(ingest_repository, db, existing.id)
+            background_tasks.add_task(ingest_repository, existing.id)
             return existing
         return existing
 
@@ -68,7 +68,7 @@ def import_repository(
     db.refresh(new_repo)
 
     # Queue background task for cloning, parsing, indexing and overview generation
-    background_tasks.add_task(ingest_repository, db, new_repo.id)
+    background_tasks.add_task(ingest_repository, new_repo.id)
 
     return new_repo
 
